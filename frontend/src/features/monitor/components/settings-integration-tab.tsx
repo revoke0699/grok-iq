@@ -257,12 +257,12 @@ export function SettingsIntegrationTab({
       <SettingsCard
         icon={Workflow}
         title='导入后处理'
-        description='匹配到 grok2api 账号后，按顺序执行降权、稳定等待、首次探针和通过后恢复。'
+        description='匹配到 grok2api 账号后先停用。探针全部通过才启用并恢复优先级；关闭探针时收到导入事件就启用。'
       >
         <SettingList>
           <SettingListItem
             label='注册后创建探针'
-            description='匹配账号后按稳定窗口等待，再补齐出口并加入持久队列。关闭后只接收导入事件。'
+            description='匹配账号后先停用，按稳定窗口等待，再补齐出口并加入持久队列。关闭后不检测，收到导入事件就启用，账号可以正常使用。'
             checked={form.initialProbeOnRegister}
             onCheckedChange={(value) => set('initialProbeOnRegister', value)}
           >
@@ -284,7 +284,7 @@ export function SettingsIntegrationTab({
           </SettingListItem>
           <SettingListItem
             label='注册后降低 grok2api 优先级'
-            description='匹配到新账号后立即降低上游路由优先级，避免未验证账号进入生产流量。全部注册探针通过后恢复原值；恢复失败由联动后台定时重试，探针未通过则保持低优先级。'
+            description='停用之外，再把优先级降成负数。探针临时启用账号时，未绑定路由不会调度负数优先级。通过后恢复原值；未通过则保持停用和低优先级。'
             checked={form.registerPriorityHoldEnabled}
             disabled={!automaticProbe}
             onCheckedChange={(value) =>
@@ -295,7 +295,7 @@ export function SettingsIntegrationTab({
               <div className='max-w-xs'>
                 <NumberField
                   label='注册账号临时优先级'
-                  hint='需低于普通账号，默认 -1000000。探针通过后恢复为导入时记录的原值。'
+                  hint='必须为负数，默认 -1000000。未绑定路由不调度负数优先级。探针通过后恢复为导入时记录的原值。'
                   value={form.registerPriorityHold}
                   min={-2000000000}
                   max={0}

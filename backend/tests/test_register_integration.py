@@ -24,6 +24,10 @@ class FakeGrokClient:
         self.priority_writes.append((int(account_id), int(priority)))
         return {"id": int(account_id), "priority": int(priority)}
 
+    async def set_account_enabled(self, account_id: int, enabled: bool) -> dict[str, Any]:
+        self.enabled[int(account_id)] = bool(enabled)
+        return {"id": int(account_id), "enabled": bool(enabled)}
+
     async def get_account(self, account_id: int) -> dict[str, Any]:
         return {
             "id": str(account_id),
@@ -190,7 +194,7 @@ class RegisterAccountService:
         return {
             "id": str(resolved_id),
             "email": email,
-            "enabled": True,
+            "enabled": self.client.enabled.get(resolved_id, True),
             "authStatus": "active",
             "egressNodeId": None,
             "priority": self.client.priorities.get(resolved_id, self.account_priority),
@@ -543,6 +547,7 @@ async def test_webhook_holds_priority_before_stabilization_wait():
     assert repository.retried is not None
     assert probes.values is None
     assert account_service.client.priorities[17] == -1000
+    assert account_service.client.enabled[17] is False
     held = repository.get_event("event-hold-wait")
     assert held is not None
     assert held["priority_hold_status"] == "held"
@@ -572,6 +577,7 @@ async def test_webhook_skips_priority_hold_when_disabled():
 
     assert repository.completed == ("event-no-hold", 17, ["run-1"])
     assert account_service.client.priorities == {}
+    assert account_service.client.enabled[17] is False
     assert repository.get_event("event-no-hold") is None or repository.get_event(
         "event-no-hold"
     ).get("priority_hold_status") not in {"held", "restore_failed"}
@@ -610,6 +616,7 @@ async def test_priority_hold_restores_after_register_probes_pass():
     )
 
     assert account_service.client.priorities[17] == 8
+    assert account_service.client.enabled[17] is True
     restored = repository.get_event("event-restore")
     assert restored is not None
     assert restored["priority_hold_status"] == "restored"
@@ -647,6 +654,7 @@ async def test_priority_hold_keeps_low_priority_when_probe_fails():
     )
 
     assert account_service.client.priorities[17] == -500
+    assert account_service.client.enabled[17] is False
     kept = repository.get_event("event-keep")
     assert kept is not None
     assert kept["priority_hold_status"] == "kept"
@@ -1101,6 +1109,27 @@ async def test_callback_after_import_without_probe():
     assert callback["email"] == "new@example.test"
 
 
+@pytest.mark.asyncio
+async def test_disabled_import_is_released_when_register_probe_is_off():
+    service, _, account_service, _ = _service(
+        settings=_callback_settings(initial_probe_on_register=False)
+    )
+    account_service.client.enabled[17] = False
+
+    await service._process_claimed(
+        {
+            "event_id": "event-release-without-probe",
+            "attempts": 1,
+            "grok2api_account_id": 17,
+            "email": "new@example.test",
+            "bot_risk": False,
+        }
+    )
+
+    assert account_service.client.enabled[17] is True
+    assert account_service.client.priorities == {}
+
+
 async def _kept_register_hold(
     event_id: str = "event-kept",
     *,
@@ -1245,17 +1274,24 @@ async def test_clean_run_does_not_clobber_operator_priority_change():
 
 
 @pytest.mark.asyncio
-async def test_clean_run_leaves_hold_on_disabled_or_locked_account():
-    service, repository, account_service, probes = await _kept_register_hold()
-    account_service.client.enabled[17] = False
+async def test_clean_run_releases_parked_account():
+    service, _, account_service, _probes = await _kept_register_hold()
+    assert account_service.client.enabled[17] is False
 
     assert (
         await service.maybe_lift_priority_hold_after_clean_run(_clean_manual_run())
-        is False
+        is True
     )
+    assert account_service.client.enabled[17] is True
+    assert account_service.client.priorities[17] == 8
 
+
+@pytest.mark.asyncio
+async def test_clean_run_leaves_hold_on_locked_account():
+    service, repository, account_service, probes = await _kept_register_hold()
     account_service.client.enabled[17] = True
     probes.repository.locked_account_ids.add(17)
+
     assert (
         await service.maybe_lift_priority_hold_after_clean_run(_clean_manual_run())
         is False

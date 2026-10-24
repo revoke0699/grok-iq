@@ -176,7 +176,7 @@ class RegisterIntegrationService:
                     account_id,
                 )
                 return
-            await self._apply_priority_hold(event, account)
+            await self._gate_registered_account(event, account)
             if self.settings.initial_probe_on_register:
                 self._ensure_initial_probe_ready(event, account)
             run_ids = await self._enqueue_initial_probe(event_id, account)
@@ -420,11 +420,11 @@ class RegisterIntegrationService:
         """Lift a register priority hold once a later probe run is clean.
 
         ``run`` is the finished (terminal) run.  The register probe's own
-        verdict (``kept``) is not final: an account that later passes a probe
-        and is enabled in grok2api gets its original priority back.  The hold
-        is only lifted while grok2api still reports the held priority, so an
+        verdict (``kept``) is not final: a later clean probe releases the
+        parked account and restores its original priority.  The hold is only
+        lifted while grok2api still reports the held priority, so an
         operator's manual change or a different demotion is never clobbered.
-        Returns True when the priority was restored.
+        A quarantined account stays parked. Returns True when restored.
         """
 
         account_id = int(run.get("account_id") or 0)
@@ -455,10 +455,10 @@ class RegisterIntegrationService:
         if client is None or not hasattr(client, "get_account"):
             return False
         account = await client.get_account(account_id)
-        if not bool(account.get("enabled")):
+        if not bool(account.get("enabled")) and self._release_blocked(account_id):
             logger.info(
                 "register priority hold lift skipped run=%s event_id=%s "
-                "account_id=%s reason=account_disabled",
+                "account_id=%s reason=quarantined",
                 run.get("id"),
                 event_id,
                 account_id,
@@ -538,6 +538,58 @@ class RegisterIntegrationService:
         self._next_hold_scan_at = now + HOLD_SCAN_INTERVAL_SECONDS
         await self.scan_priority_holds()
 
+    async def _gate_registered_account(
+        self,
+        event: dict[str, Any],
+        account: dict[str, Any],
+    ) -> None:
+        """Keep a new registration out of client traffic until probes pass.
+
+        Closing the register probe releases the account immediately. The
+        priority hold still runs when probes are enabled, and non-positive
+        priority is also excluded from unbound grok2api routes while a probe
+        temporarily turns the account on.
+        """
+
+        if not self.settings.initial_probe_on_register:
+            await self._set_imported_account_enabled(account, True)
+            return
+        await self._apply_priority_hold(event, account)
+        await self._set_imported_account_enabled(account, False)
+
+    async def _set_imported_account_enabled(
+        self,
+        account: dict[str, Any],
+        enabled: bool,
+    ) -> None:
+        if bool(account.get("enabled", True)) == enabled:
+            return
+        client = getattr(self.account_service, "client", None)
+        if client is None or not hasattr(client, "set_account_enabled"):
+            action = "启用" if enabled else "停用"
+            raise RegisteredAccountPending(
+                f"grok2api 客户端不可用，无法{action}注册账号"
+            )
+        account_id = int(account.get("id") or 0)
+        if account_id <= 0:
+            raise RegisteredAccountPending("注册账号 ID 无效")
+        await client.set_account_enabled(account_id, enabled)
+        account["enabled"] = enabled
+        logger.info(
+            "register account routing %s account_id=%s",
+            "enabled" if enabled else "disabled",
+            account_id,
+        )
+
+    def _release_blocked(self, account_id: int) -> bool:
+        getter = getattr(self.accounts, "get_assessment", None)
+        if getter is None or account_id <= 0:
+            return False
+        assessment = getter(account_id) or {}
+        if str(assessment.get("monitor_status") or "") == "quarantined":
+            return True
+        return bool(assessment.get("disabled_by_monitor"))
+
     async def _apply_priority_hold(
         self,
         event: dict[str, Any],
@@ -589,10 +641,12 @@ class RegisterIntegrationService:
         if event is None:
             return
         status = str(event.get("priority_hold_status") or PRIORITY_HOLD_NONE)
-        if status not in {PRIORITY_HOLD_HELD, PRIORITY_HOLD_RESTORE_FAILED}:
-            return
         outcome = self._register_probe_outcome(event)
         if outcome == "pending":
+            return
+        if status not in {PRIORITY_HOLD_HELD, PRIORITY_HOLD_RESTORE_FAILED}:
+            if outcome == "passed":
+                await self._enable_released_account(event)
             return
         if outcome != "passed":
             if outcome == "insufficient":
@@ -685,6 +739,17 @@ class RegisterIntegrationService:
                 "缺少可恢复的原始 grok2api 优先级",
             )
             return
+        if self._release_blocked(account_id):
+            self.repository.mark_priority_kept(
+                event_id,
+                "账号仍在隔离，暂不放行到 grok2api",
+            )
+            logger.info(
+                "register release skipped event_id=%s account_id=%s reason=quarantined",
+                event_id,
+                account_id,
+            )
+            return
         client = getattr(self.account_service, "client", None)
         if client is None or not hasattr(client, "set_account_priority"):
             self.repository.mark_priority_restore_failed(
@@ -693,6 +758,7 @@ class RegisterIntegrationService:
             return
         try:
             await client.set_account_priority(account_id, int(original))
+            await self._enable_account_id(client, account_id)
         except Exception as exc:
             self.repository.mark_priority_restore_failed(event_id, str(exc))
             logger.warning(
@@ -709,6 +775,35 @@ class RegisterIntegrationService:
             account_id,
             original,
         )
+
+    async def _enable_released_account(self, event: dict[str, Any]) -> None:
+        """Turn a parked import back on when probes are not holding priority."""
+
+        account_id = int(
+            event.get("resolved_account_id") or event.get("grok2api_account_id") or 0
+        )
+        if account_id <= 0 or self._release_blocked(account_id):
+            return
+        client = getattr(self.account_service, "client", None)
+        if client is None or not hasattr(client, "get_account"):
+            return
+        try:
+            await self._enable_account_id(client, account_id)
+        except Exception:
+            logger.exception(
+                "register release enable failed event_id=%s account_id=%s",
+                event.get("event_id"),
+                account_id,
+            )
+
+    async def _enable_account_id(self, client: Any, account_id: int) -> None:
+        if not hasattr(client, "get_account") or not hasattr(client, "set_account_enabled"):
+            return
+        account = await client.get_account(account_id)
+        if bool(account.get("enabled", True)):
+            return
+        await client.set_account_enabled(account_id, True)
+        logger.info("register account released account_id=%s", account_id)
 
     async def maybe_enqueue_register_callback(
         self,
