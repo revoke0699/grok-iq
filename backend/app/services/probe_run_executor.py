@@ -118,11 +118,16 @@ class ProbeRunExecutor:
         manager._validate_account_for_targets(
             account,
             list(run["proxy_targets"]),
-            allow_disabled=manager._is_quarantine_recheck_run(run),
+            allow_disabled=manager._allows_disabled_current_probe(run),
         )
         state.original_node_id = int(account.get("egressNodeId") or 0) or None
         state.original_mode = str(account.get("egressAssignmentMode") or "")
         priority_value = account.get("priority")
+        diagnostic_priority = int(manager.settings.probe_diagnostic_priority)
+        # Priority 0 still serves unbound grok2api traffic. A registration
+        # probe must stay strictly negative while it is temporarily enabled.
+        if manager._is_register_probe(run):
+            diagnostic_priority = min(diagnostic_priority, -1)
         state.snapshot = manager.repository.ensure_account_settings_snapshot(
             run_id=run_id,
             enabled=bool(account.get("enabled")),
@@ -130,7 +135,7 @@ class ProbeRunExecutor:
             max_concurrent=int(account.get("maxConcurrent") or 1),
             egress_node_id=state.original_node_id,
             egress_assignment_mode=state.original_mode,
-            diagnostic_priority=manager.settings.probe_diagnostic_priority,
+            diagnostic_priority=diagnostic_priority,
             diagnostic_max_concurrent=1,
         )
         try:

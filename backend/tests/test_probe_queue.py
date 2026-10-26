@@ -1940,6 +1940,69 @@ async def test_current_egress_probe_rejects_unbound_or_disabled_account(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_register_probe_samples_disabled_account_then_parks_it_again(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "grokiq.db")
+    database.initialize()
+    repository = ProbeRepository(database)
+    client = DisabledFakeGrokClient()
+    client.account_egress_node_id = 7
+    client.account_egress_mode = "manual"
+    client.account_priority = -1_000_000
+    manager = ProbeManager(
+        settings=Settings(
+            database_path=tmp_path / "grokiq.db",
+            scheduler_enabled=False,
+            probe_worker_concurrency=1,
+            probe_step_delay_seconds=0,
+            probe_current_egress_interval_seconds=0,
+            probe_diagnostic_priority=0,
+        ),
+        repository=repository,
+        accounts=AccountRepository(database),
+        client=client,  # type: ignore[arg-type]
+        thresholds=Thresholds(),
+    )
+    await manager.start()
+    try:
+        result = await manager.enqueue_register_event(
+            source_event_id="registration:334:grok2api-imported",
+            account={
+                "id": 10,
+                "name": "new-account",
+                "email": "new@example.test",
+                "enabled": False,
+                "priority": -1_000_000,
+                "egressNodeId": 7,
+                "egressAssignmentMode": "manual",
+            },
+            profile_ids=["quality-marker"],
+            execution_mode="chat",
+            rounds=1,
+            proxy_targets=[{"kind": "current", "id": None}],
+        )
+        assert result["created"] == 1
+
+        detail = await wait_for_terminal_run(repository, result["runIds"][0])
+        run = detail["run"]
+        assert run["status"] == "completed"
+        assert run["trigger"] == "register"
+        assert run["original_account_enabled"] is False
+        assert run["original_account_priority"] == -1_000_000
+        assert run["diagnostic_priority"] == -1
+        assert run["diagnostic_activation_active"] is False
+        assert client.routing_updates[0]["enabled"] is True
+        assert client.routing_updates[0]["priority"] == -1
+        assert client.routing_updates[-1]["enabled"] is False
+        assert client.routing_updates[-1]["priority"] == -1_000_000
+        assert client.account_enabled is False
+        assert detail["samples"][0]["status"] == "done"
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_quarantine_recheck_plan_activates_disabled_account_on_current_egress(
     tmp_path: Path,
 ):

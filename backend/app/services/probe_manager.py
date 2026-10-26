@@ -295,7 +295,9 @@ class ProbeManager:
         account_id = int(account.get("id") or 0)
         self._ensure_account_restore_ready(account_id)
         targets = await self.validate_targets(proxy_targets, execution_mode=execution_mode)
-        self._validate_account_for_targets(account, targets)
+        # The register gate disables the account before this call so grok2api
+        # cannot serve it. The worker turns it on only for each sample.
+        self._validate_account_for_targets(account, targets, allow_disabled=True)
         async with self._enqueue_lock:
             result = self.repository.create_register_runs(
                 source_event_id=source_event_id,
@@ -318,7 +320,11 @@ class ProbeManager:
         values = self.repository.retry_values(run_id)
         self._ensure_account_restore_ready(int(values["account_id"]))
         account = await self.client.get_account(int(values["account_id"]))
-        self._validate_account_for_targets(account, list(values["proxy_targets"]))
+        self._validate_account_for_targets(
+            account,
+            list(values["proxy_targets"]),
+            allow_disabled=self._is_register_probe(values),
+        )
         values["account_created_at"] = account_created_at(account) or values.get(
             "account_created_at"
         )
@@ -387,7 +393,9 @@ class ProbeManager:
             return None
         account = await self.client.get_account(account_id)
         self._validate_account_for_targets(
-            account, list(run.get("proxy_targets") or [])
+            account,
+            list(run.get("proxy_targets") or []),
+            allow_disabled=True,
         )
         tried_node_ids = self.repository.register_tried_egress_node_ids(run)
         current_node_id = int(account.get("egressNodeId") or 0)
@@ -405,7 +413,11 @@ class ProbeManager:
                 sorted(tried_node_ids),
             )
             return None
-        self._validate_account_for_targets(rebound, list(run.get("proxy_targets") or []))
+        self._validate_account_for_targets(
+            rebound,
+            list(run.get("proxy_targets") or []),
+            allow_disabled=True,
+        )
         async with self._enqueue_lock:
             follow_up_id = self.repository.create_run(
                 account_id=account_id,
@@ -498,6 +510,17 @@ class ProbeManager:
         ProbeTargetValidator.validate_account_for_targets(
             account, targets, allow_disabled=allow_disabled
         )
+
+    @staticmethod
+    def _is_register_probe(run: dict[str, Any]) -> bool:
+        return str(run.get("trigger") or "") == "register" or bool(
+            str(run.get("source_event_id") or "").strip()
+        )
+
+    def _allows_disabled_current_probe(self, run: dict[str, Any]) -> bool:
+        """Registration and isolation re-checks may sample a parked account."""
+
+        return self._is_register_probe(run) or self._is_quarantine_recheck_run(run)
 
     def _is_quarantine_recheck_run(self, run: dict[str, Any]) -> bool:
         plan_id = str(run.get("plan_id") or "")

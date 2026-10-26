@@ -35,9 +35,9 @@ class ProbeTargetValidator:
     ) -> None:
         """Validate one account for the selected targets.
 
-        ``allow_disabled`` is reserved for isolation re-checks: the call
-        runner activates the account in diagnostic mode for each sample and
-        restores the recorded settings afterwards.
+        ``allow_disabled`` is for isolation re-checks and registration probes.
+        Both park the account first. The call runner activates it in diagnostic
+        mode for each sample and restores the recorded settings afterwards.
         """
 
         cls.validate_account(account)
