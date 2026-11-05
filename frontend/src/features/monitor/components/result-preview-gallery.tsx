@@ -880,17 +880,22 @@ export function ResultPreviewGallery({
     selectedRunId,
   ])
 
-  useEffect(() => {
-    if (!open || !accountPerspective) return
-    if (
+  // Keep the selected run in sync during render, not in an effect: when the
+  // account view is open and the current selection is missing or no longer
+  // in the run list, fall back to the first run. React re-renders
+  // immediately before committing, so this does not cascade like setState
+  // in an effect.
+  if (
+    open &&
+    accountPerspective &&
+    !(
       selectedRunId &&
       selectedAccountRuns.some((entry) => entry.runId === selectedRunId)
-    ) {
-      return
-    }
+    )
+  ) {
     const nextRunId = selectedAccountRuns[0]?.runId
     if (nextRunId) setSelectedRunId(nextRunId)
-  }, [accountPerspective, open, selectedAccountRuns, selectedRunId])
+  }
 
   if (!open) {
     if (sessionView !== undefined) setSessionView(undefined)
