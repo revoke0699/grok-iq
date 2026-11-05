@@ -11,11 +11,11 @@ from app.services.auth_service import AuthService
 from app.services.chat_service import ChatService
 from app.services.egress_service import EgressService
 from app.services.export_service import ExportService
+from app.services.linuxdo_oauth import LinuxDoOAuthService
 from app.services.probe_manager import ProbeManager
 from app.services.register_integration import RegisterIntegrationService
 from app.services.request_audit_service import RequestAuditService
 from app.services.scheduler import SchedulerService
-from app.services.linuxdo_oauth import LinuxDoOAuthService
 from app.services.settings_service import RuntimeSettingsService
 from app.services.sso_report_service import SsoReportService
 from app.services.update_check import UpdateCheckService

@@ -12,8 +12,8 @@ from app.integrations.wechat.client import WeChatIntegrationError
 from app.persistence.auth_repository import AdminAlreadyExistsError
 from app.persistence.probe_repository import QueueFullError, RunStateError
 from app.services.auth_service import AuthenticationError
-from app.services.linuxdo_oauth import LinuxDoAuthenticationRequired
 from app.services.chat_service import ChatUpstreamError
+from app.services.linuxdo_oauth import LinuxDoAuthenticationRequired
 from app.services.sso_report_service import SsoReportNotFoundError
 
 from .auth import AdminAuthenticationRequired
