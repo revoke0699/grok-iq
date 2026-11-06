@@ -15,7 +15,11 @@ from app.core.version import current_version
 
 logger = logging.getLogger(__name__)
 
-GITHUB_REPOSITORY = "kaibush/grok-iq"
+GITHUB_REPOSITORY = "revoke0699/grok-iq"
+# 必须查自己的 fork，而不是上游 kaibush/grok-iq：fork 的版本号带 -forkN 后缀，
+# 与上游的 v0.7.1 比较时会被 semver 当成预发布版本（v0.7.1-fork2 < v0.7.1），
+# 于是 updateAvailable 恒为真、每小时重复报“有新版”。查自己的 Release 时，
+# 只有 fork 自己发了新标签才会报更新，上游发版不会再误报。
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPOSITORY}/releases"
 GITHUB_LATEST_RELEASE_API = (
     f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"

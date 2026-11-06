@@ -130,3 +130,41 @@ async def test_update_check_reports_missing_release_without_an_error():
     assert result["status"] == "no_release"
     assert result["updateAvailable"] is False
     assert result["error"] == ""
+
+
+def test_update_check_targets_fork_releases_not_upstream():
+    """回归：fork 部署必须查自己的 Release。
+
+    上游 kaibush/grok-iq 的最新版是 v0.7.1，而 fork 构建的版本号是
+    v0.7.1-forkN；semver 会把 -forkN 当预发布后缀，于是 v0.7.1-fork2
+    < v0.7.1，updateAvailable 恒为真。改查 revoke0699/grok-iq 后，只有
+    fork 自己发了新标签才会报更新。
+    """
+    from app.services.update_check import GITHUB_REPOSITORY
+
+    assert GITHUB_REPOSITORY == "revoke0699/grok-iq"
+
+
+@pytest.mark.asyncio
+async def test_fork_version_is_not_behind_its_own_release():
+    """回归：VERSION 文件的 v0.7.2 不应被自己 fork 的 v0.7.1-fork2 判为落后。"""
+
+    async def fetch_release():
+        return {
+            "tag_name": "v0.7.1-fork2",
+            "html_url": "https://github.com/revoke0699/grok-iq/releases/tag/v0.7.1-fork2",
+            "body": "",
+            "published_at": "2026-11-05T00:00:00Z",
+        }
+
+    service = UpdateCheckService(
+        installed_version="v0.7.2",
+        fetch_latest=fetch_release,
+    )
+
+    result = await service.check()
+
+    assert result["status"] == "up_to_date"
+    assert result["updateAvailable"] is False
+    assert result["currentVersion"] == "v0.7.2"
+    assert result["latestVersion"] == "v0.7.1-fork2"

@@ -91,15 +91,10 @@ jobs:
           else
             echo "value=linux/amd64" >> "$GITHUB_OUTPUT"
           fi
-      - name: Set build arguments
-        id: build-args
-        shell: bash
-        run: |
-          if [[ "${{ matrix.component }}" == "backend" && "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "value=GROKIQ_VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=" >> "$GITHUB_OUTPUT"
-          fi
+      # 注意：不要再把 GROKIQ_VERSION 设成标签名。标签是 v0.7.1-forkN 这种 fork
+      # 编号，写进镜像后它会盖掉 VERSION 文件里的 v0.7.2，让界面把当前版本报成
+      # v0.7.1-forkN；更新检查再拿它跟上游 v0.7.1 比，就会误报“有新版”。
+      # 不传这个参数时，后端按 VERSION 文件（v0.7.2）报版本。
       - name: Build and publish ${{ matrix.component }}
         uses: docker/build-push-action@v6
         with:
@@ -108,7 +103,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ steps.build-args.outputs.value }}
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
 
